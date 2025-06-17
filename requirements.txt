@@ -1,0 +1,10 @@
+numpy
+pandas
+scikit-learn
+shap
+matplotlib
+sh
+torch
+torchvision
+ipykernel
+click
