@@ -48,6 +48,7 @@ class MLPModel(nn.Module):
     def forward(self, input_tensor):
         return torch.clamp(self.model(input_tensor), 0, 1)
 
+
 def prepare_data(caso: str, tmp_folder: str):
 
     geneticos = pd.read_csv(path.join(caso, "genotype_sim.raw"), sep="\t")
@@ -102,102 +103,15 @@ def main(
     columns = X_df.columns
     y = np.load(path.join(tmp_folder, f"feno_all_c.npy"))
 
-    for ivalue in range(niters):
-        if ivalue == 0:
-            print("CASO", caso, "- REAL DATA - ", ivalue)
-        else:
-            print("CASO", caso, "- SHUFFLE DATA - ", ivalue)
-            np.random.shuffle(y)
-        caso_random = path.join(tmp_folder, f"rand{ivalue}")
-        sh.mkdir("-p", caso_random)
-
-        np.save(path.join(caso_random, "y_random"), y)
-
-        y = y == 1
-        y = np.array(y, dtype=int)
-
-        print(y[y == 0].shape, y[y == 1].shape)
-
-        _, X_test, _, y_test = train_test_split(
-            X, y, test_size=0.15, random_state=42, stratify=y
-        )
-
-        model = MLPModel(len(columns)).to(_DEVICE)
-
-        train_ds = TensorDataset(torch.Tensor(X), torch.Tensor(y))
-        test_ds = TensorDataset(torch.Tensor(X_test), torch.Tensor(y_test))
-
-        loader_train = DataLoader(
-            train_ds, batch_size=batch_size, shuffle=True, drop_last=True
-        )
-
-        loader_test = DataLoader(
-            test_ds, batch_size=batch_size, shuffle=True, drop_last=True
-        )
-
-        optimizer = optim.Adam(model.parameters(), lr=lr)
-        loss_fn = nn.BCELoss()
-        epoch_bar = tqdm.tqdm(range(1, n_epochs + 1), desc="Training", unit="epoch")
-        for epoch in epoch_bar:
-            running_loss = 0
-            model.train()
-            for i, (_X, labels) in enumerate(loader_train):
-                optimizer.zero_grad()
-
-                outputs = model.forward(torch.Tensor(_X).to(device))
-                loss = loss_fn(outputs, labels.unsqueeze(-1).to(device))
-                loss.backward()
-                optimizer.step()
-                running_loss += loss.item()
-
-            model.eval()
-            with torch.no_grad():
-                running_loss_val = 0
-                for i, (_X, labels) in enumerate(loader_test):
-                    outputs = model.forward(torch.Tensor(_X).to(device))
-                    loss = loss_fn(outputs, labels.unsqueeze(-1).to(device))
-                    running_loss_val += loss.item()
-
-            epoch_bar.set_description(f"Epoch {epoch}/{n_epochs}")
-            epoch_bar.set_postfix(
-                train_loss=f"{running_loss / batch_size:.5f}",
-                test_loss=f"{running_loss_val / batch_size:.5f}",
-            )
-
-        del outputs, loss, loader_test, loader_train, optimizer
-
-        e = shap.DeepExplainer(
-            model.to(device), torch.from_numpy(np.array(X_test)).to(device).float()
-        )
-
-        shap_values = e.shap_values(torch.from_numpy(X_test).to(device).float())
-
-        print("*******************")
-
-        np.save(path.join(f"{caso_random}", "nfi_values.npy"), shap_values)
-        df = pd.DataFrame(
-            {
-                "mean_abs_shap": np.mean(np.abs(shap_values), axis=0),
-                "stdev_abs_shap": np.std(np.abs(shap_values), axis=0),
-                "mean_shap": np.mean(shap_values.reshape(-1), axis=0),
-                "name": columns,
-            }
-        )
-
-        np.save(
-            f"{caso_random}/gene_v2.npy",
-            np.array(df.sort_values("mean_abs_shap", ascending=False)["name"]),
-        )
-
-        np.save(
-            path.join(f"{caso_random}", "data_gene.npy"),
-            np.array(df.sort_values("mean_abs_shap", ascending=False)),
+    for ivalue in tqdm.tqdm(range(niters)):
+        train_caso_random(
+            device, batch_size, lr, n_epochs, tmp_folder, X, columns, y, ivalue
         )
 
     if niters > 1:
         ## NULL DISTRIBUTION
         stack_exp = []
-        for i in tqdm.tqdm(range(1, niters)):
+        for i in range(1, niters):
             shap_values_rand = np.load(
                 path.join(tmp_folder, f"rand{i}", "nfi_values.npy")
             )
@@ -222,14 +136,11 @@ def main(
     columns = np.load(path.join(tmp_folder, "columns.npy"))
     nfi = np.load(path.join(tmp_folder, "rand0", "nfi_values.npy"))
 
-    import ipdb
-
-    # ipdb.set_trace()
     df = pd.DataFrame(
         {
             "mean_abs_shap": np.mean(np.abs(nfi), axis=0),
             "stdev_abs_shap": np.std(np.abs(nfi), axis=0),
-            "mean_shap": np.mean(nfi.reshape(-1), axis=0),
+            "mean_shap": np.mean(nfi, axis=0),
             "snp": columns,
         }
     )
@@ -255,6 +166,87 @@ def main(
 
     # Limpiar carpeta temporal de laburo
     shutil.rmtree(tmp_folder)
+
+
+def train_caso_random(
+    device, batch_size, lr, n_epochs, tmp_folder, X, columns, y, ivalue
+):
+    if ivalue != 0:
+        np.random.shuffle(y)
+    caso_random = path.join(tmp_folder, f"rand{ivalue}")
+    sh.mkdir("-p", caso_random)
+
+    np.save(path.join(caso_random, "y_random"), y)
+
+    y = y == 1
+    y = np.array(y, dtype=int)
+
+    _, X_test, _, y_test = train_test_split(
+        X, y, test_size=0.15, random_state=42, stratify=y
+    )
+
+    model = MLPModel(len(columns)).to(_DEVICE)
+
+    train_ds = TensorDataset(torch.Tensor(X), torch.Tensor(y))
+    test_ds = TensorDataset(torch.Tensor(X_test), torch.Tensor(y_test))
+
+    loader_train = DataLoader(
+        train_ds, batch_size=batch_size, shuffle=True, drop_last=True
+    )
+
+    loader_test = DataLoader(
+        test_ds, batch_size=batch_size, shuffle=True, drop_last=True
+    )
+
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    loss_fn = nn.BCELoss()
+    for epoch in range(n_epochs):
+        running_loss = 0
+        model.train()
+        for i, (_X, labels) in enumerate(loader_train):
+            optimizer.zero_grad()
+
+            outputs = model.forward(torch.Tensor(_X).to(device))
+            loss = loss_fn(outputs, labels.unsqueeze(-1).to(device))
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+
+        model.eval()
+        with torch.no_grad():
+            running_loss_val = 0
+            for i, (_X, labels) in enumerate(loader_test):
+                outputs = model.forward(torch.Tensor(_X).to(device))
+                loss = loss_fn(outputs, labels.unsqueeze(-1).to(device))
+                running_loss_val += loss.item()
+
+    del outputs, loss, loader_test, loader_train, optimizer
+
+    e = shap.DeepExplainer(
+        model.to(device), torch.from_numpy(np.array(X_test)).to(device).float()
+    )
+
+    shap_values = e.shap_values(torch.from_numpy(X_test).to(device).float())
+
+    np.save(path.join(f"{caso_random}", "nfi_values.npy"), shap_values)
+    df = pd.DataFrame(
+        {
+            "mean_abs_shap": np.mean(np.abs(shap_values), axis=0),
+            "stdev_abs_shap": np.std(np.abs(shap_values), axis=0),
+            "mean_shap": np.mean(shap_values, axis=0),
+            "name": columns,
+        }
+    )
+
+    np.save(
+        f"{caso_random}/gene_v2.npy",
+        np.array(df.sort_values("mean_abs_shap", ascending=False)["name"]),
+    )
+
+    np.save(
+        path.join(f"{caso_random}", "data_gene.npy"),
+        np.array(df.sort_values("mean_abs_shap", ascending=False)),
+    )
 
 
 if __name__ == "__main__":
