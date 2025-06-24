@@ -48,18 +48,19 @@ class MLPModel(nn.Module):
     def forward(self, input_tensor):
         return torch.clamp(self.model(input_tensor), 0, 1)
 
+def prepare_data(caso: str, tmp_folder: str):
 
-def prepare_data(caso: str):
-
-    geneticos = pd.read_csv(f"{caso}/genotype_sim.raw", sep="\t")
+    geneticos = pd.read_csv(path.join(caso, "genotype_sim.raw"), sep="\t")
     gen = np.array(geneticos[list(geneticos.columns)[6:]])
-    feno = pd.read_csv(f"{caso}/fenodata.txt", sep=" ")["bmi"]
+    feno = pd.read_csv(path.join(caso, f"fenodata.txt"), sep=" ")["bmi"]
 
-    np.save(f"{caso}/x.npy", gen)
-    np.save(f"{caso}/iids_all.npy", np.array(geneticos["IID"]))
-    np.save(f"{caso}/feno_all.npy", np.array(feno))
-    np.save(f"{caso}/feno_all_c.npy", np.array(feno))
-    np.save(f"{caso}/columns.npy", np.array(list(geneticos.columns)[6:]))
+    np.save(path.join(tmp_folder, f"x.npy"), gen)
+    np.save(path.join(tmp_folder, f"iids_all.npy"), np.array(geneticos["IID"]))
+    np.save(path.join(tmp_folder, f"feno_all.npy"), np.array(feno))
+    np.save(path.join(tmp_folder, f"feno_all_c.npy"), np.array(feno))
+    np.save(
+        path.join(tmp_folder, f"columns.npy"), np.array(list(geneticos.columns)[6:])
+    )
 
 
 _BATCH_SIZE = 16
@@ -86,18 +87,20 @@ def main(
     caso: str, niters: int, device: str, batch_size: str, lr: float, n_epochs: int
 ):
 
+    tmp_folder = path.join(caso, f".tmp_{caso}")
+    sh.mkdir("-p", tmp_folder)
     # Prepara data
     # .raw,.txt -> .npy
-    prepare_data(caso)
+    prepare_data(caso, tmp_folder=tmp_folder)
 
-    X = np.load(f"{caso}/x.npy")
-    columns = np.load(f"{caso}/columns.npy", allow_pickle=True)
+    X = np.load(path.join(tmp_folder, f"x.npy"))
+    columns = np.load(path.join(tmp_folder, f"columns.npy"), allow_pickle=True)
     X_df = pd.DataFrame(X, columns=columns)
 
     print("DATA A UTILIZAR", X_df.shape)
     X = np.array(X_df)
     columns = X_df.columns
-    y = np.load(f"{caso}/feno_all_c.npy")
+    y = np.load(path.join(tmp_folder, f"feno_all_c.npy"))
 
     for ivalue in range(niters):
         if ivalue == 0:
@@ -105,9 +108,7 @@ def main(
         else:
             print("CASO", caso, "- SHUFFLE DATA - ", ivalue)
             np.random.shuffle(y)
-        tmp_folder = path.join(caso, ".tmp_case")
         caso_random = path.join(tmp_folder, f"rand{ivalue}")
-
         sh.mkdir("-p", caso_random)
 
         np.save(path.join(caso_random, "y_random"), y)
@@ -218,7 +219,7 @@ def main(
             n_permutaciones + 1
         )
         np.save(path.join(tmp_folder, "p_values_emp.npy"), p_values)
-    columns = np.load(path.join(caso, "columns.npy"))
+    columns = np.load(path.join(tmp_folder, "columns.npy"))
     nfi = np.load(path.join(tmp_folder, "rand0", "nfi_values.npy"))
 
     import ipdb
